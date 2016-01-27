@@ -60,16 +60,18 @@ class DbConfig implements ConfigContract, ArrayAccess
      *
      * @param string $key
      * @param mixed $value
+     * @param mixed $server
+     * @param mixed $database
      *
      * @return void
      *
      * @throws Exceptions\SaveException
      */
-    public function store($key, $value)
+    public function store($key, $value , $server = null, $database = null )
     {
 
         // save key => value into DB
-        $this->dbProvider->store($key, $value);
+        $this->dbProvider->store($key, $value , $server, $database);
 
         //set value to config
         $this->origConfig->set($key, $value);
@@ -81,16 +83,17 @@ class DbConfig implements ConfigContract, ArrayAccess
      * Remove item from the database
      *
      * @param string $key
-     *
+     * @param mixed $server
+     * @param mixed $database
      * @return void
      *
      * @throws Exceptions\SaveException
      */
-    public function forget($key)
+    public function forget($key, $server = null, $database = null)
     {
 
         // remove item from DB
-        $this->dbProvider->forget($key);
+        $this->dbProvider->forget($key , $server , $database);
 
         // remove item from original config
         $this->origConfig->offsetUnset($key);
@@ -107,12 +110,13 @@ class DbConfig implements ConfigContract, ArrayAccess
     }
 
     /**
+     * @param int $database
      * Clear the table with settings
      */
-    public function clearDb()
+    public function clearDb($database = null)
     {
 
-        $this->dbProvider->clear();
+        $this->dbProvider->clear($database);
 
     }
 
@@ -167,10 +171,15 @@ class DbConfig implements ConfigContract, ArrayAccess
      */
     public function get($key, $default = null, $fallback = true)
     {
+        //当key存在于白名单时，直接读取文件内的值
+        $white_list = $this->origConfig->get('db-config.white_list');
+        if(in_array($key , $white_list)){
+            return $this->origConfig->get($key , $default);
+        }
+
         $d = microtime(true);
 
         $result =  array_get($this->items, $key, $d);
-
 
         // found one in DB or
         if ($result !== $d) {

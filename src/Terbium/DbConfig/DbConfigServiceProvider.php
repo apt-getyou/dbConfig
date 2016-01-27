@@ -1,8 +1,7 @@
 <?php namespace Terbium\DbConfig;
 
 use Illuminate\Support\ServiceProvider;
-use Illuminate\Filesystem\Filesystem;
-use Illuminate\Config\FileLoader;
+use Illuminate\Config;
 
 class DbConfigServiceProvider extends ServiceProvider
 {
@@ -47,9 +46,9 @@ class DbConfigServiceProvider extends ServiceProvider
 
         $this->app['db-config'] = $this->app->share(function($app) {
 
-            $table = $app['config']->get('db-config.table');
+            $config = $app['config']->get('db-config');
 
-            $dbProvider = new DbProvider($table);
+            $dbProvider = new DbProvider($config);
 
             return new DbConfig($app['config'], $dbProvider);
         });

@@ -1,6 +1,7 @@
 <?php namespace Terbium\DbConfig;
 
-use Illuminate\Support\Facades\DB;
+use DB;
+use Cache;
 use Illuminate\Support\NamespacedItemResolver;
 use Terbium\DbConfig\Exceptions\SaveException;
 
@@ -12,15 +13,56 @@ class DbProvider extends NamespacedItemResolver implements Interfaces\DbProvider
      */
     protected $table;
 
+    /**
+     * Cache configuration
+     */
+    protected $cache;
+
+    /**
+     * 分库字段
+     */
+    protected $database;
+
+    /**
+     * 服务器id
+     */
+    protected $server_id;
+
+    /**
+     * 是否开启分站配置功能
+     */
+    protected $multi_site;
+
+
+    /**
+     * 默认库id
+     */
+    const database = 0;
+
+
+    /**
+     * 默认服务器id
+     */
+    const server = 0;
+
 
     /**
      * Create a new database configuration loader.
-     * @param $table database table
+     * DbProvider constructor.
+     *
+     * @param $config
      */
-    public function __construct($table)
-    {
+    public function __construct($config) {
+        $this->table = $config['table'];
 
-        $this->table = $table;
+        $this->cache = $config['cache'];
+
+        $this->database = $config['database'];
+
+        $this->server_id = $config['server_id'];
+
+        $this->multi_site = $config['multi_site'];
+
     }
 
     /**
@@ -30,19 +72,43 @@ class DbProvider extends NamespacedItemResolver implements Interfaces\DbProvider
      *
      * @return array
      */
-    public function load($collection = null)
-    {
+    public function load($collection = null) {
 
+        if ($this->cache['enable']) {
+            $items = Cache::remember($this->cache['key'], $this->cache['minutes'], function () use ($collection) {
+                return $this->initItems($collection);
+            });
+            return $items;
+        }
+
+        return $this->initItems($collection);
+
+    }
+
+    /**
+     * get config data from DB
+     *
+     * @param null $collection
+     *
+     * @return array
+     */
+    private function initItems($collection = null) {
         $items = array();
 
         $list = DB::table($this->table);
+
+        /**
+         * 若开启多站点设置，则限制搜索内容
+         */
+        $database = $this->multi_site ? $this->database : self::database;
+
+        $list = $list->where('database', '=', $database);
 
         if ($collection !== null) {
             $list = $list->where('key', 'LIKE', $collection . '%');
         }
 
-        $list = $list->lists('value', 'key');
-
+        $list = $list->pluck('value', 'key');
 
         // convert dotted list back to multidimensional array
         foreach ($list as $key => $value) {
@@ -56,15 +122,16 @@ class DbProvider extends NamespacedItemResolver implements Interfaces\DbProvider
     /**
      * Save item to the database or update the existing one
      *
-     * @param string $key
-     * @param mixed $value
+     * @param string  $key
+     * @param mixed   $value
+     * @param bool    $server
+     * @param integer $database
      *
      * @return void
      *
      * @throws Exceptions\SaveException
      */
-    public function store($key, $value)
-    {
+    public function store($key, $value, $server = null, $database = null) {
 
         if (!is_array($value)) {
             $value = array($key => $value);
@@ -78,59 +145,72 @@ class DbProvider extends NamespacedItemResolver implements Interfaces\DbProvider
         }
 
         foreach ($value as $k => $v) {
-            $this->_store($k, $v);
+            $this->_store($k, $v, $server, $database);
         }
 
     }
 
 
     /**
-     * @param string $key
-     * @param string $value
+     * @param string  $key
+     * @param string  $value
+     * @param integer $server
+     * @param integer $database
+     *
      * @throws Exceptions\SaveException
      */
-    private function _store($key, $value)
-    {
+    private function _store($key, $value, $server = null, $database = null) {
 
         $provider = $this;
         $table = $this->table;
 
         DB::transaction(
-                function () use (&$provider, $table, $key, $value) {
+            function () use (&$provider, $table, $key, $value, $server, $database) {
 
-                    // remove old keys
-                    // set 1.2.3.4
-                    // set 1.2.3.4.5
-                    // set 1 - will keep previous 2 records in database, and that's bad =)
-                    $provider->forget($key);
-
-
-                    // Try to insert a pair of key => value to DB.
-                    // In case of exception - update them.
-                    // This code should be replaced with insert_with_update method after its being implemented
-                    // See http://laravel.uservoice.com/forums/175973-laravel-4/suggestions/3535821-provide-support-for-bulk-insert-with-update-such-
+                // remove old keys
+                // set 1.2.3.4
+                // set 1.2.3.4.5
+                // set 1 - will keep previous 2 records in database, and that's bad =)
+                $provider->forget($key, $server, $database);
 
 
-                    $value = json_encode($value);
+                // Try to insert a pair of key => value to DB.
+                // In case of exception - update them.
+                // This code should be replaced with insert_with_update method after its being implemented
+                // See http://laravel.uservoice.com/forums/175973-laravel-4/suggestions/3535821-provide-support-for-bulk-insert-with-update-such-
 
+
+                $value = json_encode($value);
+
+                $list = DB::table($table);
+
+                $database = is_null($database) ? self::database : $database;
+
+                $server = is_null($server) ? self::server : $server;
+
+                $insert = array(
+                    'key'      => $key,
+                    'value'    => $value,
+                    'database' => $database,
+                    'server'   => $server,
+                );
+
+                $result = $list->where('key', $key)->where('database', '=', $database)->where('server', '=', $server)->get();
+
+                if (empty($result)) {
                     try {
-
-                        DB::table($table)->insert(array('key' => $key, 'value' => $value));
-
+                        $list->insert($insert);
                     } catch (\Exception $e) {
-
-                        try {
-
-                            DB::table($table)->where('key', $key)->update(array('value' => $value));
-
-                        } catch (\Exception $e) {
-
-                            throw new SaveException("Cannot save to database: " . $e->getMessage());
-
-                        }
-
+                        throw new SaveException("Cannot insert to database: " . $e->getMessage());
+                    }
+                } else {
+                    try {
+                        $list->where('key', $key)->where('database', '=', $database)->where('server', '=', $server)->update(array('value' => $value));
+                    } catch (\Exception $e) {
+                        throw new SaveException("Cannot save to database: " . $e->getMessage());
                     }
                 }
+            }
         );
     }
 
@@ -139,19 +219,29 @@ class DbProvider extends NamespacedItemResolver implements Interfaces\DbProvider
      * Remove item from the database
      *
      * @param string $key
+     * @param int    $server
+     * @param int    $database
      *
      * @return void
      *
      * @throws Exceptions\SaveException
      */
-    public function forget($key)
-    {
+    public function forget($key, $server = null, $database = null) {
 
         try {
+            $list = DB::table($this->table);
 
-            DB::table($this->table)->where('key', 'LIKE', $key . '.%')->delete();
+            $database = is_null($database) ? self::database : $database;
 
-            DB::table($this->table)->where('key', 'LIKE', $key)->delete();
+            $list = $list->where('database', '=', $database);
+
+            if (!is_null($server)) {
+                $list = $list->where('server', '=', $server);
+            }
+
+            $list->where('key', 'LIKE', $key . '.%')->delete();
+
+            $list->where('key', 'LIKE', $key)->delete();
 
         } catch (\Exception $e) {
 
@@ -163,16 +253,18 @@ class DbProvider extends NamespacedItemResolver implements Interfaces\DbProvider
     /**
      * Clear the table with settings
      *
+     * @param int $database
+     *
      * @return void
      *
      * @throws Exceptions\SaveException
      */
-    public function clear()
-    {
+    public function clear($database = null) {
 
         try {
+            $database = is_null($database) ? self::database : $database;
 
-            DB::table($this->table)->truncate();
+            DB::table($this->table)->where('database', '=', $database);
 
         } catch (\Exception $e) {
 
@@ -182,16 +274,33 @@ class DbProvider extends NamespacedItemResolver implements Interfaces\DbProvider
 
     }
 
+    /**
+     * Clear the table with settings
+     * @return void
+     *
+     * @throws Exceptions\SaveException
+     */
+    public function clearAll() {
+        try {
+
+            DB::table($this->table)->truncate();
+
+        } catch (\Exception $e) {
+
+            throw new SaveException("Cannot clear database: " . $e->getMessage());
+
+        }
+    }
+
 
     /**
      * Return query builder with list of settings from database
      *
-     * @param string $wildcard
+     * @param null $wildcard
      *
-     * @return Illuminate\Database\Query\Builder
+     * @return $this|\Illuminate\Database\Query\Builder
      */
-    public function listDb($wildcard = null)
-    {
+    public function listDb($wildcard = null) {
 
         $query = DB::table($this->table);
         if (!empty($wildcard)) {

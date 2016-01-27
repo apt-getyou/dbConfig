@@ -13,22 +13,39 @@ interface DbProviderInterface {
 	/**
 	 * Save item to the database or update the existing one
 	 *
-	 * @param string $key
-	 * @param mixed $value
+	 * @param      $key
+	 * @param      $value
+	 * @param null $server
+	 * @param null $database
+	 *
+	 * @return mixed
 	 */
-	public function store($key, $value);
+	public function store($key, $value , $server = null, $database = null);
 
 	/**
 	 * Remove item from the database
+	 * @param      $key
+	 * @param null $server
+	 * @param null $database
 	 *
-	 * @param string $key
+	 * @return mixed
 	 */
-	public function forget($key);
+	public function forget($key , $server = null, $database = null);
 
 	/**
 	 * Clear the table with settings
+	 *
+	 * @param null $database
+	 *
+	 * @return mixed
 	 */
-	public function clear();
+	public function clear($database = null);
+
+	/**
+	 * Clear the table with settings
+	 * @return mixed
+	 */
+	public function clearAll();
 
 
 }
